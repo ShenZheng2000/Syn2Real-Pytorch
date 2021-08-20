@@ -1,25 +1,6 @@
 import math
-import torchvision.models as models
 from utils import *
 
-
-class SEBlock(nn.Module):
-    def __init__(self, input_dim, reduction):
-        super().__init__()
-        mid = int(input_dim / reduction)
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(input_dim, reduction),
-            nn.ReLU(inplace=True),
-            nn.Linear(reduction, input_dim),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y
 
 class Bottle2neckX(nn.Module):
     expansion = 4
@@ -42,7 +23,7 @@ class Bottle2neckX(nn.Module):
 
         self.conv1 = nn.Conv2d(inplanes, D*C*scale, kernel_size=1, stride=1, padding=0, bias=False)
         self.bn3 = nn.BatchNorm2d(D*C*scale)
-        self.SE = SEBlock(inplanes,C)
+        #self.SE = SEBlock(inplanes,C)
 
         if scale == 1:
           self.nums = 1
@@ -108,228 +89,26 @@ class Bottle2neckX(nn.Module):
 
         return torch.cat([x, out], 1)
 
-class BottleneckBlock(nn.Module):
-    def __init__(self, in_planes, out_planes, dropRate=0.0):
-        super(BottleneckBlock, self).__init__()
-        inter_planes = out_planes * 4
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv1 = nn.Conv2d(in_planes, inter_planes, kernel_size=1, stride=1,
-                               padding=0, bias=False)
-        self.bn2 = nn.BatchNorm2d(inter_planes)
-        self.conv2 = nn.Conv2d(inter_planes, out_planes, kernel_size=3, stride=1,
-                               padding=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(inter_planes)
-        self.conv3 = nn.Conv2d(inter_planes, out_planes, kernel_size=3, stride=1,
-                               padding=1, bias=False)
-        self.droprate = dropRate
-    def forward(self, x):
-        out = self.conv1(self.relu(self.bn1(x)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        out = self.conv2(self.relu(self.bn2(out)))
-        out = self.conv3(self.relu(self.bn3(out)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        return torch.cat([x, out], 1)
-
-
-
-class BottleneckBlock1(nn.Module):
-    def __init__(self, in_planes, out_planes, dropRate=0.0):
-        super(BottleneckBlock1, self).__init__()
-        inter_planes = out_planes * 4
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv1 = nn.Conv2d(in_planes, inter_planes, kernel_size=1, stride=1,
-                               padding=0, bias=False)
-        self.bn2 = nn.BatchNorm2d(inter_planes)
-        self.conv2 = nn.Conv2d(inter_planes, out_planes, kernel_size=5, stride=1,
-                               padding=2, bias=False)
-        self.droprate = dropRate
-    def forward(self, x):
-        out = self.conv1(self.relu(self.bn1(x)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        out = self.conv2(self.relu(self.bn2(out)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        return torch.cat([x, out], 1)
-
-
-
-class BottleneckBlock2(nn.Module):
-    def __init__(self, in_planes, out_planes, dropRate=0.0):
-        super(BottleneckBlock2, self).__init__()
-        inter_planes = out_planes * 4
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv1 = nn.Conv2d(in_planes, inter_planes, kernel_size=1, stride=1,
-                               padding=0, bias=False)
-        self.bn2 = nn.BatchNorm2d(inter_planes)
-        self.conv2 = nn.Conv2d(inter_planes, out_planes, kernel_size=7, stride=1,
-                               padding=3, bias=False)
-        self.droprate = dropRate
-    def forward(self, x):
-        out = self.conv1(self.relu(self.bn1(x)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        out = self.conv2(self.relu(self.bn2(out)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        return torch.cat([x, out], 1)
 
 class TransitionBlock(nn.Module):
-    def __init__(self, in_planes, out_planes, dropRate=0.0):
+    def __init__(self, in_planes, out_planes, choice='1', dropRate=0.0):
         super(TransitionBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = nn.ConvTranspose2d(in_planes, out_planes, kernel_size=1, stride=1,
                                padding=0, bias=False)
         self.droprate = dropRate
+        self.choice = choice
     def forward(self, x):
         out = self.conv1(self.relu(self.bn1(x)))
         if self.droprate > 0:
             out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        return F.upsample_nearest(out, scale_factor=2)
-
-
-
-class TransitionBlock1(nn.Module):
-    def __init__(self, in_planes, out_planes, dropRate=0.0):
-        super(TransitionBlock1, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv1 = nn.ConvTranspose2d(in_planes, out_planes, kernel_size=1, stride=1,
-                               padding=0, bias=False)
-        self.droprate = dropRate
-    def forward(self, x):
-        out = self.conv1(self.relu(self.bn1(x)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        return F.avg_pool2d(out, 2)
-
-
-
-class TransitionBlock3(nn.Module):
-    def __init__(self, in_planes, out_planes, dropRate=0.0):
-        super(TransitionBlock3, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv1 = nn.ConvTranspose2d(in_planes, out_planes, kernel_size=1, stride=1,
-                               padding=0, bias=False)
-        self.droprate = dropRate
-    def forward(self, x):
-        out = self.conv1(self.relu(self.bn1(x)))
-        if self.droprate > 0:
-            out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
-        return out
-
-
-
-
-
-
-class vgg19ca(nn.Module):
-    def __init__(self):
-        super(vgg19ca, self).__init__()
-
-
-
-
-        ############# 256-256  ##############
-        haze_class = models.vgg19_bn(pretrained=True)
-        self.feature = nn.Sequential(haze_class.features[0])
-
-        for i in range(1,3):
-            self.feature.add_module(str(i),haze_class.features[i])
-
-        self.conv16=nn.Conv2d(64, 24, kernel_size=3,stride=1,padding=1)  # 1mm
-        self.dense_classifier=nn.Linear(127896, 512)
-        self.dense_classifier1=nn.Linear(512, 4)
-
-
-    def forward(self, x):
-
-        feature=self.feature(x)
-        # feature = Variable(feature.data, requires_grad=True)
-
-        feature=self.conv16(feature)
-        # print feature.size()
-
-        # feature=Variable(feature.data,requires_grad=True)
-
-
-
-        out = F.relu(feature, inplace=True)
-        out = F.avg_pool2d(out, kernel_size=7).view(out.size(0), -1)
-        # print out.size()
-
-        # out=Variable(out.data,requires_grad=True)
-        out = F.relu(self.dense_classifier(out))
-        out = (self.dense_classifier1(out))
-
-
-        return out
-
-
-class scale_residue_est(nn.Module):
-    def __init__(self):
-        super(scale_residue_est, self).__init__()
-
-        self.conv1 = BottleneckBlock(64, 32)
-        self.trans_block1 = TransitionBlock3(96, 32)
-        self.conv2 = BottleneckBlock(32, 32)
-        self.trans_block2 = TransitionBlock3(64, 32)
-        self.conv3 = BottleneckBlock(32, 32)
-        self.trans_block3 = TransitionBlock3(64, 32)
-        self.conv_refin = nn.Conv2d(32, 16, 3, 1, 1)
-        self.tanh = nn.Tanh()
-        self.refine3 = nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
-
-        self.relu = nn.LeakyReLU(0.2, inplace=True)
-
-    def forward(self, x):
-        x1=self.conv1(x)
-        x1 = self.trans_block1(x1)
-        x2=self.conv2(x1)
-        x2 = self.trans_block2(x2)
-        x3=self.conv3(x2)
-        x3 = self.trans_block3(x3)
-        x4 = self.relu((self.conv_refin(x3)))
-        residual = self.tanh(self.refine3(x4))
-
-        return residual
-
-class scale_residue_conf(nn.Module):
-    def __init__(self):
-        super(scale_residue_conf, self).__init__()
-
-        self.conv1 = nn.Conv2d(35,16,3,1,1)#BottleneckBlock(35, 16)
-        #self.trans_block1 = TransitionBlock3(51, 8)
-        self.conv2 = BottleneckBlock(16, 16)
-        self.trans_block2 = TransitionBlock3(32, 16)
-        self.conv3 = BottleneckBlock(16, 16)
-        self.trans_block3 = TransitionBlock3(32, 16)
-        self.conv_refin = nn.Conv2d(16, 16, 3, 1, 1)
-        self.sig = torch.nn.Sigmoid()
-        self.refine3 = nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
-
-        self.relu = nn.LeakyReLU(0.2, inplace=True)
-
-    def forward(self, x):
-        x1=self.conv1(x)
-        #x1 = self.trans_block1(x1)
-        x2=self.conv2(x1)
-        x2 = self.trans_block2(x2)
-        x3=self.conv3(x2)
-        x3 = self.trans_block3(x3)
-        residual = self.sig(self.refine3(x3))
-
-        return residual
-
-
-
+        if self.choice == '1': # upsample
+            return F.upsample_nearest(out, scale_factor=2)
+        elif self.choice == '2': # downsample
+            return F.avg_pool2d(out, 2)
+        elif self.choice == '3': # same
+            return out
 
 
 class DeRain_v2(nn.Module):
@@ -344,42 +123,42 @@ class DeRain_v2(nn.Module):
         self.dense_block1=Bottle2neckX(16,16, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
 
         ############# Block2-scale 0.50  ##############
-        self.trans_block2=TransitionBlock1(32,32)
+        self.trans_block2=TransitionBlock(32,32, choice='2')
         self.dense_block2=Bottle2neckX(32,32, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block2_o=TransitionBlock3(64,32)
+        self.trans_block2_o=TransitionBlock(64,32, choice='3')
 
         ############# Block3-scale 0.250  ##############
-        self.trans_block3=TransitionBlock1(32,32)
+        self.trans_block3=TransitionBlock(32,32, choice='2')
         self.dense_block3=Bottle2neckX(32,32, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block3_o=TransitionBlock3(64,64)
+        self.trans_block3_o=TransitionBlock(64,64, choice='3')
 
         ############# Block4-scale 0.25  ##############
-        self.trans_block4=TransitionBlock1(64,128)
+        self.trans_block4=TransitionBlock(64,128, choice='2')
         self.dense_block4=Bottle2neckX(128,128, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block4_o=TransitionBlock3(256,128)
+        self.trans_block4_o=TransitionBlock(256,128, choice='3')
 
         ############# Block5-scale 0.25  ##############
         self.dense_block5=Bottle2neckX(128,128, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block5_o=TransitionBlock3(256,128)
+        self.trans_block5_o=TransitionBlock(256,128, choice='3')
 
         ############# Block6-scale 0.25  ##############
         self.dense_block6=Bottle2neckX(128,128, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block6_o=TransitionBlock3(256,128)
+        self.trans_block6_o=TransitionBlock(256,128, choice='3')
 
         ############# Block7-scale 0.25  ############## 7--3 skip connection
         self.trans_block7=TransitionBlock(32,64)
         self.dense_block7=Bottle2neckX(128,128, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block7_o=TransitionBlock3(256,32)
+        self.trans_block7_o=TransitionBlock(256,32, choice='3')
 
         ############# Block8-scale 0.5  ############## 8--2 skip connection
         self.trans_block8=TransitionBlock(32,32)
         self.dense_block8=Bottle2neckX(64,64, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block8_o=TransitionBlock3(128,32)
+        self.trans_block8_o=TransitionBlock(128,32, choice='3')
 
         ############# Block9-scale 1.0  ############## 9--1 skip connection
         self.trans_block9=TransitionBlock(32,32)
         self.dense_block9=Bottle2neckX(80,80, self.baseWidth, self.cardinality, self.stride, downsample=None, scale=self.scale, stype='normal')
-        self.trans_block9_o=TransitionBlock3(160,16)
+        self.trans_block9_o=TransitionBlock(160,16, choice='3')
 
 
         self.conv_refin=nn.Conv2d(16,16,3,1,1)
@@ -452,34 +231,4 @@ class DeRain_v2(nn.Module):
 
         return clean,z
 
-
-
-class discriminator(nn.Module):
-    # initializers
-    def __init__(self, d=64):
-        super(discriminator, self).__init__()
-        self.conv1 = nn.Conv2d(6, d, 4, 2, 1)
-        self.conv2 = nn.Conv2d(d, d * 2, 4, 2, 1)
-        self.conv2_bn = nn.BatchNorm2d(d * 2)
-        self.conv3 = nn.Conv2d(d * 2, d * 4, 4, 2, 1)
-        self.conv3_bn = nn.BatchNorm2d(d * 4)
-        self.conv4 = nn.Conv2d(d * 4, d * 8, 4, 1, 1)
-        self.conv4_bn = nn.BatchNorm2d(d * 8)
-        self.conv5 = nn.Conv2d(d * 8, 1, 4, 1, 1)
-
-    # weight_init
-    def weight_init(self, mean, std):
-        for m in self._modules:
-            normal_init(self._modules[m], mean, std)
-
-    # forward method
-    def forward(self, input, label):
-        x = torch.cat([input, label], 1)
-        x = F.leaky_relu(self.conv1(x), 0.2)
-        x = F.leaky_relu(self.conv2_bn(self.conv2(x)), 0.2)
-        x = F.leaky_relu(self.conv3_bn(self.conv3(x)), 0.2)
-        x = F.leaky_relu(self.conv4_bn(self.conv4(x)), 0.2)
-        x = F.sigmoid(self.conv5(x))
-
-        return x
 
