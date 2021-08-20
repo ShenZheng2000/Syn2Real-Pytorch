@@ -16,9 +16,9 @@ def kronecker(A, B):
     AB = torch.einsum("ab,cd->acbd", A, B)
     AB = AB.view(A.size(0)*B.size(0), A.size(1)*B.size(1))
     return AB
-# numpy version of Linear kernel function 
+# numpy version of Linear kernel function
 def kernel_linear(X_u,X_l,vector_length,Num_A,Num_B):
-    
+
     x_l_t =  X_l.repeat(Num_A,1)
     x_u_t =  X_u.repeat(1,Num_B)
     x_u_t = x_u_t.view(Num_A*Num_B,vector_length)
@@ -42,7 +42,7 @@ def pairwise_distances(x, y=None):
     else:
         y_t = torch.transpose(x, 0, 1)
         y_norm = x_norm.view(1, -1)
-    
+
     dist = x_norm + y_norm - 2.0 * torch.mm(x, y_t)
     # Ensure diagonal is zero if x=y
     # if y is None:
@@ -51,7 +51,7 @@ def pairwise_distances(x, y=None):
     dist[dist != dist] = 0
     return dist
 
-# torch version of Squared Exponential kernel function 
+# torch version of Squared Exponential kernel function
 def kernel_se(x,y,var):
     sigma_1 = 1.0
     pw = 0.6
@@ -60,7 +60,7 @@ def kernel_se(x,y,var):
     Ker = sigma_1**2 *torch.exp(-0.5*d/l_1**2)
     return Ker
 
-# numpy version of Squared Exponential kernel function 
+# numpy version of Squared Exponential kernel function
 def kernel_se_np(x,y,var):
     sigma_1 = 1.0
     pw = 0.6
@@ -78,7 +78,7 @@ def kernel_rq(x,y,var,alpha=0.5):
     Ker = sigma_1**2 *(1+(0.5*d/(alpha*l_1**2)))**(-1*alpha)
     return Ker
 
-# numpy version of Rational Quadratic kernel function 
+# numpy version of Rational Quadratic kernel function
 def kernel_rq_np(x,y,var,alpha=0.5):
     sigma_1 = 1.0
     pw = 0.6
@@ -87,12 +87,21 @@ def kernel_rq_np(x,y,var,alpha=0.5):
     Ker = sigma_1**2 * (1+(0.5*d/(alpha*l_1**2)))**(-1*alpha)
     return Ker
 
+def numpy_to_torch(input1, input2, input3, input4, input5):
+    output1 = torch.from_numpy(input1.astype(np.float32)).cuda()
+    output2 = torch.from_numpy(input2.astype(np.float32)).cuda()
+    output3 = torch.from_numpy(input3.astype(np.float32)).cuda()
+    output4 = torch.from_numpy(input4.astype(np.float32)).cuda()
+    output5 = torch.from_numpy(input5.astype(np.float32)).cuda()
+    return output1, output2, output3, output4, output5
+
+
 
 class GPStruct(object):
     def __init__(self,num_lbl,num_unlbl,train_batch_size,version,kernel_type):
         self.num_lbl = num_lbl # number of labeled images
         self.num_unlbl = num_unlbl # number of unlabeled images
-        self.z_height=32 # height of the feature map z i.e dim 2 
+        self.z_height=32 # height of the feature map z i.e dim 2
         self.z_width = 32 # width of the feature map z i.e dim 3
         self.z_numchnls = 32 # number of feature maps in z i.e dim 1
         self.num_nearest = 8 #number of nearest neighbors for unlabeled vector
@@ -106,6 +115,10 @@ class GPStruct(object):
         self.train_batch_size = train_batch_size
         self.version = version # version1 is GP SIMO model and version2 is GP MIMO model
         self.kernel_type = kernel_type
+
+        # Identity matrix
+        self.Eye = torch.eye(self.z_numchnls).cuda()
+
         # declaring kernel function
         if kernel_type =='Linear':
             self.kernel_comp = kernel_linear
@@ -121,7 +134,116 @@ class GPStruct(object):
         elif kernel_type =='Rational_quadratic':
             self.kernel_comp_np = kernel_rq_np
 
-    
+    def get_kernel(self, tensor):
+        tensor_vec = tensor.view(-1, self.z_height * self.z_width)  # z tensor to a vector
+        if self.version == 'version1':
+            tensor_vec = tensor.view(-1, self.z_numchnls * self.z_height * self.z_width)  # z tensor to a vector
+            if self.kernel_type == 'Linear':
+                ker_UU = self.kernel_comp(tensor_vec, tensor_vec, self.z_height * self.z_width * self.z_numchnls, 1,
+                                          1)  # k(z,z), i.e kernel value for z,z
+            else:
+                ker_UU = self.kernel_comp(tensor_vec, tensor_vec, self.var_Fz_lbl)
+        else:
+            if self.kernel_type == 'Linear':
+                ker_UU = self.kernel_comp(tensor_vec, tensor_vec, self.z_height * self.z_width, self.z_numchnls,
+                                          self.z_numchnls)  # k(z,z), i.e kernel value for z,z
+            else:
+                ker_UU = self.kernel_comp(tensor_vec, tensor_vec, self.var_Fz_lbl)
+
+        return tensor_vec, ker_UU
+
+    def get_dic_label(self, nearest_vl):
+        # Nearest and Farthest neighbors
+        tp32_vec = np.array(sorted(range(len(nearest_vl)), key=lambda k: nearest_vl[k])[-1 * self.num_nearest:])
+        lt32_vec = np.array(sorted(range(len(nearest_vl)), key=lambda k: nearest_vl[k])[:self.num_nearest])
+
+        # Nearest neighbor latent space labeled vectors
+        near_dic_lbl = np.zeros((self.num_nearest, self.z_numchnls, self.z_height, self.z_width))
+        for j in range(self.num_nearest):
+            near_dic_lbl[j, :] = self.Fz_lbl[tp32_vec[j], :, :, :]
+
+        # Farthest neighbor latent space labeled vectors
+        far_dic_lbl = np.zeros((self.num_nearest, self.z_numchnls, self.z_height, self.z_width))
+        for j in range(self.num_nearest):
+            far_dic_lbl[j, :] = self.Fz_lbl[lt32_vec[j], :, :, :]
+
+        return near_dic_lbl, far_dic_lbl
+
+    def reshape_dic_label(self, near_dic_lbl, far_dic_lbl):
+        # reshape dic label
+        if self.version == 'version1':
+            near_vec_lbl = np.reshape(near_dic_lbl, (self.num_nearest, self.z_numchnls * self.z_height * self.z_width))
+            far_vec_lbl = np.reshape(far_dic_lbl,
+                                     (self.num_nearest, self.z_numchnls * self.z_height * self.z_width))
+        else:
+            near_vec_lbl = np.reshape(near_dic_lbl, (self.num_nearest * self.z_numchnls, self.z_height * self.z_width))
+            far_vec_lbl = np.reshape(far_dic_lbl,
+                                     (self.num_nearest * self.z_numchnls, self.z_height * self.z_width))
+        return near_vec_lbl, far_vec_lbl
+
+    def get_kernel_matrix(self, near_vec_lbl, far_vec_lbl):
+        if self.kernel_type == 'Linear':
+            ker_LL = self.kernel_comp_np(near_vec_lbl, near_vec_lbl)
+            farker_LL = self.kernel_comp_np(far_vec_lbl, far_vec_lbl)
+        else:
+            ker_LL = self.kernel_comp_np(near_vec_lbl, near_vec_lbl, self.var_Fz_lbl)
+            farker_LL = self.kernel_comp_np(far_vec_lbl, far_vec_lbl, self.var_Fz_lbl)
+
+        if self.version == 'version1':
+            inv_ker = inv(ker_LL + 1.0 * np.eye(self.num_nearest))
+            farinv_ker = inv(farker_LL + 1.0 * np.eye(self.num_nearest))
+        else:
+            inv_ker = inv(ker_LL + 1.0 * np.eye(self.num_nearest * self.z_numchnls))
+            farinv_ker = inv(farker_LL + 1.0 * np.eye(self.num_nearest * self.z_numchnls))
+
+        return inv_ker, farinv_ker
+
+    def get_tensor_variance(self, tensor_vec, near_vec_lbl, far_vec_lbl, inv_ker, farinv_ker, ker_UU):
+        if self.version == 'version1':
+            if self.kernel_type == 'Linear':
+                ker_UL = self.kernel_comp(tensor_vec, near_vec_lbl, self.z_height * self.z_width * self.z_numchnls, 1,
+                                          self.num_nearest)
+            else:
+                ker_UL = self.kernel_comp(tensor_vec, near_vec_lbl, self.var_Fz_lbl)
+
+            sigma_est = ker_UU - torch.matmul(ker_UL, torch.matmul(inv_ker, ker_UL.t())) + 1.0
+
+            # computing variance between farthest labeled vectors and unlabeled vector
+            if self.kernel_type == 'Linear':
+                Farker_UL = self.kernel_comp(tensor_vec, far_vec_lbl, self.z_height * self.z_width * self.z_numchnls, 1,
+                                             self.num_nearest)
+            else:
+                Farker_UL = self.kernel_comp(tensor_vec, far_vec_lbl, self.var_Fz_lbl)
+            far_sigma_est = ker_UU - torch.matmul(Farker_UL, torch.matmul(farinv_ker, Farker_UL.t())) + 1.0
+        else:
+            # computing sigma or variance between nearest labeled vectors and unlabeled vector
+            if self.kernel_type == 'Linear':
+                ker_UL = self.kernel_comp(tensor_vec, near_vec_lbl, self.z_height * self.z_width, self.z_numchnls,
+                                          self.z_numchnls * self.num_nearest)
+            else:
+                ker_UL = self.kernel_comp(tensor_vec, near_vec_lbl, self.var_Fz_lbl)
+            sigma_est = ker_UU - torch.matmul(ker_UL, torch.matmul(inv_ker, ker_UL.t())) + self.Eye
+            # computing variance between farthest labeled vectors and unlabeled vector
+            if self.kernel_type == 'Linear':
+                Farker_UL = self.kernel_comp(tensor_vec, far_vec_lbl, self.z_height * self.z_width, self.z_numchnls,
+                                             self.z_numchnls * self.num_nearest)
+            else:
+                Farker_UL = self.kernel_comp(tensor_vec, far_vec_lbl, self.var_Fz_lbl)
+            far_sigma_est = ker_UU - torch.matmul(Farker_UL, torch.matmul(farinv_ker, Farker_UL.t())) + self.Eye
+
+        return ker_UL, sigma_est, far_sigma_est
+
+    def compute_loss_unsup(self, tensor_vec, mean_pred, sigma_est, far_sigma_est, inv_sigma):
+        if self.version == 'version1':
+            loss_unsup = torch.mean(((tensor_vec - mean_pred) ** 2) / sigma_est[0]) + \
+                         1.0 * self.lambda_var * torch.log(torch.det(sigma_est)) - \
+                         0.000001 * self.lambda_var * torch.log(torch.det(far_sigma_est))
+        else:
+            loss_unsup = torch.mean(
+                torch.matmul((tensor_vec - mean_pred).t(), torch.matmul(inv_sigma, (tensor_vec - mean_pred)))) + \
+                         1.0 * self.lambda_var * torch.log(torch.det(sigma_est))
+
+        return loss_unsup
 
     def gen_featmaps_unlbl(self,dataloader,net,device):
         print("Unlabelled: started storing feature vectors and kernel matrix")
@@ -132,7 +254,7 @@ class GPStruct(object):
             input_im = input_im.to(device)
             gt = gt.to(device)
 
-            
+
             net.eval()
             pred_image,zy_in = net(input_im)
             tensor_mat = zy_in.data#torch.squeeze(zy_in.data)
@@ -152,7 +274,7 @@ class GPStruct(object):
         return
 
     def gen_featmaps(self,dataloader,net,device):
-        
+
         count =0
         print("Labelled: started storing feature vectors and kernel matrix")
         for batch_id, train_data in enumerate(dataloader):
@@ -160,10 +282,11 @@ class GPStruct(object):
             input_im, gt, imgid = train_data
             input_im = input_im.to(device)
             gt = gt.to(device)
-            
+
             net.eval()
             pred_image,zy_in = net(input_im)
             tensor_mat = zy_in.data#torch.squeeze(zy_in.data)
+
             # saving latent space feature vectors
             for i in range(tensor_mat.shape[0]):
                 if imgid[i] not in self.dict_lbl.keys():
@@ -172,6 +295,8 @@ class GPStruct(object):
                 tmp_i = self.dict_lbl[imgid[i]]
                 self.Fz_lbl[tmp_i,:,:,:] = tensor_mat[i,:,:,:].cpu().numpy()
                 tensor = torch.squeeze(tensor_mat[i,:,:,:])
+
+
         X = self.Fz_lbl.reshape(-1,self.z_numchnls*self.z_height*self.z_width)
         Y = self.Fz_lbl.reshape(-1,self.z_numchnls*self.z_height*self.z_width)
         self.var_Fz_lbl = np.std(self.Fz_lbl,axis=0)
@@ -183,135 +308,47 @@ class GPStruct(object):
 
     def compute_gploss(self,zy_in,imgid,batch_id,label_flg=0):
         tensor_mat = zy_in
-        
-        Sg_Pred = torch.zeros([self.train_batch_size,1])
-        Sg_Pred = Sg_Pred.cuda()
-        LSg_Pred = torch.zeros([self.train_batch_size,1])
-        LSg_Pred = LSg_Pred.cuda()
+        Sg_Pred = torch.zeros([self.train_batch_size,1]).cuda()
+        LSg_Pred = torch.zeros([self.train_batch_size,1]).cuda()
         gp_loss = 0
-        
+
         for i in range(tensor_mat.shape[0]):
             tmp_i = self.dict_unlbl[imgid[i]] if label_flg==0 else self.dict_lbl[imgid[i]] # imag_id in the dictionary
-            tensor = tensor_mat[i,:,:,:] # z tensor 
-            tensor_vec = tensor.view(-1,self.z_height*self.z_width) # z tensor to a vector
-            
-            if self.version == 'version1':
-                tensor_vec = tensor.view(-1,self.z_numchnls*self.z_height*self.z_width) # z tensor to a vector
-                if self.kernel_type =='Linear':
-                    ker_UU = self.kernel_comp(tensor_vec,tensor_vec,self.z_height*self.z_width*self.z_numchnls,1,1) # k(z,z), i.e kernel value for z,z
-                else :
-                    ker_UU = self.kernel_comp(tensor_vec,tensor_vec,self.var_Fz_lbl)
-            else :
-                if self.kernel_type =='Linear':
-                    ker_UU = self.kernel_comp(tensor_vec,tensor_vec,self.z_height*self.z_width,self.z_numchnls,self.z_numchnls) # k(z,z), i.e kernel value for z,z
-                else :
-                    ker_UU = self.kernel_comp(tensor_vec,tensor_vec,self.var_Fz_lbl)
+            tensor = tensor_mat[i,:,:,:] # z tensor
 
+            tensor_vec, ker_UU = self.get_kernel(tensor)
             nearest_vl = self.ker_unlbl[tmp_i,:] if label_flg==0 else self.ker_lbl[tmp_i,:] #kernel values are used to get neighbors
-            # Nearest and Farthest neighbors
-            tp32_vec = np.array(sorted(range(len(nearest_vl)), key=lambda k: nearest_vl[k])[-1*self.num_nearest:])
-            lt32_vec = np.array(sorted(range(len(nearest_vl)), key=lambda k: nearest_vl[k])[:self.num_nearest])
+            near_dic_lbl, far_dic_lbl = self.get_dic_label(nearest_vl)
+            near_vec_lbl, far_vec_lbl = self.reshape_dic_label(near_dic_lbl, far_dic_lbl)
 
-            # Nearest neighbor latent space labeled vectors
-            near_dic_lbl = np.zeros((self.num_nearest,self.z_numchnls,self.z_height,self.z_width))
-            for j in range(self.num_nearest):
-                near_dic_lbl[j,:] = self.Fz_lbl[tp32_vec[j],:,:,:]
-            if self.version == 'version1':
-                near_vec_lbl = np.reshape(near_dic_lbl,(self.num_nearest,self.z_numchnls*self.z_height*self.z_width))
-            else :
-                near_vec_lbl = np.reshape(near_dic_lbl,(self.num_nearest*self.z_numchnls,self.z_height*self.z_width))
-            # Farthest neighbor latent space labeled vectors
-            far_dic_lbl = np.zeros((self.num_nearest,self.z_numchnls,self.z_height,self.z_width))
-            for j in range(self.num_nearest):
-                far_dic_lbl[j,:] = self.Fz_lbl[lt32_vec[j],:,:,:]
-            if self.version == 'version1':
-                far_vec_lbl = np.reshape(far_dic_lbl,(self.num_nearest,self.z_numchnls*self.z_height*self.z_width))
-            else :
-                far_vec_lbl = np.reshape(far_dic_lbl,(self.num_nearest*self.z_numchnls,self.z_height*self.z_width))
+            # computing kernel matrix of labeled latent vectors and then computing (K_LL+sig^2I)^(-1)
+            inv_ker, farinv_ker = self.get_kernel_matrix(near_vec_lbl, far_vec_lbl)
 
-            # computing kernel matrix of labeled latent vectors 
-            # and then computing (K_LL+sig^2I)^(-1)
-            if self.kernel_type =='Linear':
-                ker_LL = self.kernel_comp_np(near_vec_lbl,near_vec_lbl)
-            else :
-                ker_LL = self.kernel_comp_np(near_vec_lbl,near_vec_lbl,self.var_Fz_lbl)
-            if self.version == 'version1':
-                inv_ker = inv(ker_LL+1.0*np.eye(self.num_nearest))
-            else :
-                inv_ker = inv(ker_LL+1.0*np.eye(self.num_nearest*self.z_numchnls))
-            if self.kernel_type =='Linear':
-                farker_LL = self.kernel_comp_np(far_vec_lbl,far_vec_lbl)
-            else :
-                farker_LL = self.kernel_comp_np(far_vec_lbl,far_vec_lbl,self.var_Fz_lbl)
-            if self.version == 'version1':
-                farinv_ker = inv(farker_LL+1.0*np.eye(self.num_nearest))
-            else :
-                farinv_ker = inv(farker_LL+1.0*np.eye(self.num_nearest*self.z_numchnls))
+            mn_pre = np.matmul(inv_ker,near_vec_lbl).astype(np.float32) # used for computing mean prediction
 
-            mn_pre = np.matmul(inv_ker,near_vec_lbl) # used for computing mean prediction
-            mn_pre = mn_pre.astype(np.float32)
-
-            #converting require variables to cuda tensors 
-            near_vec_lbl = torch.from_numpy(near_vec_lbl.astype(np.float32))
-            far_vec_lbl = torch.from_numpy(far_vec_lbl.astype(np.float32))
-            inv_ker = torch.from_numpy(inv_ker.astype(np.float32))
-            farinv_ker = torch.from_numpy(farinv_ker.astype(np.float32))
-            inv_ker = inv_ker.cuda()
-            farinv_ker = farinv_ker.cuda()
-            near_vec_lbl = near_vec_lbl.cuda()
-            far_vec_lbl = far_vec_lbl.cuda()
-
-            mn_pre = torch.from_numpy(mn_pre) # used for mean prediction (mu) or z_pseudo 
-            mn_pre = mn_pre.cuda()
-
-
-            # Identity matrix
-            Eye = torch.eye(self.z_numchnls)
-            Eye = Eye.cuda()
+            #converting require variables to cuda tensors
+            near_vec_lbl, far_vec_lbl, inv_ker, farinv_ker, mn_pre = numpy_to_torch(near_vec_lbl, far_vec_lbl, inv_ker, farinv_ker, mn_pre)
 
             # computing sigma or variance between nearest labeled vectors and unlabeled vector
-            if self.version == 'version1':
-                if self.kernel_type =='Linear':
-                    ker_UL = self.kernel_comp(tensor_vec,near_vec_lbl,self.z_height*self.z_width*self.z_numchnls,1,self.num_nearest)
-                else :
-                    ker_UL = self.kernel_comp(tensor_vec,near_vec_lbl,self.var_Fz_lbl)
-                sigma_est = ker_UU - torch.matmul(ker_UL,torch.matmul(inv_ker,ker_UL.t())) + 1.0
-                # computing variance between farthest labeled vectors and unlabeled vector
-                if self.kernel_type =='Linear':
-                    Farker_UL = self.kernel_comp(tensor_vec,far_vec_lbl,self.z_height*self.z_width*self.z_numchnls,1,self.num_nearest)
-                else :
-                    Farker_UL = self.kernel_comp(tensor_vec,far_vec_lbl,self.var_Fz_lbl)
-                far_sigma_est = ker_UU - torch.matmul(Farker_UL,torch.matmul(farinv_ker,Farker_UL.t())) + 1.0
-            else :
-                # computing sigma or variance between nearest labeled vectors and unlabeled vector
-                if self.kernel_type =='Linear':
-                    ker_UL = self.kernel_comp(tensor_vec,near_vec_lbl,self.z_height*self.z_width,self.z_numchnls,self.z_numchnls*self.num_nearest)
-                else :
-                    ker_UL = self.kernel_comp(tensor_vec,near_vec_lbl,self.var_Fz_lbl)
-                sigma_est = ker_UU - torch.matmul(ker_UL,torch.matmul(inv_ker,ker_UL.t())) + Eye
-                # computing variance between farthest labeled vectors and unlabeled vector
-                if self.kernel_type =='Linear':
-                    Farker_UL = self.kernel_comp(tensor_vec,far_vec_lbl,self.z_height*self.z_width,self.z_numchnls,self.z_numchnls*self.num_nearest)
-                else :
-                    Farker_UL = self.kernel_comp(tensor_vec,far_vec_lbl,self.var_Fz_lbl)
-                far_sigma_est = ker_UU - torch.matmul(Farker_UL,torch.matmul(farinv_ker,Farker_UL.t())) + Eye
-            
+            ker_UL, sigma_est, far_sigma_est = self.get_tensor_variance(tensor_vec, near_vec_lbl, far_vec_lbl, inv_ker, farinv_ker, ker_UU)
+
             # computing mean prediction
             mean_pred = torch.matmul(ker_UL,mn_pre) #mean prediction (mu) or z_pseudo
-            
             inv_sigma = torch.inverse(sigma_est)
-            if self.version == 'version1':
-                loss_unsup = torch.mean(((tensor_vec-mean_pred)**2)/sigma_est[0]) + 1.0*self.lambda_var*torch.log(torch.det(sigma_est)) - 0.000001*self.lambda_var*torch.log(torch.det(far_sigma_est))
-            else:
-                loss_unsup = torch.mean(torch.matmul((tensor_vec-mean_pred).t(),torch.matmul(inv_sigma,(tensor_vec-mean_pred)))) + 1.0*self.lambda_var*torch.log(torch.det(sigma_est))  #torch.mean(torch.matmul((tensor_vec-mean_pred).t(),torch.matmul(inv_sigma,(tensor_vec-mean_pred))))
+
+            # get unsupervised loss
+            #torch.mean(torch.matmul((tensor_vec-mean_pred).t(),torch.matmul(inv_sigma,(tensor_vec-mean_pred))))
+            loss_unsup = self.compute_loss_unsup(tensor_vec, mean_pred, sigma_est, far_sigma_est, inv_sigma)
+
             if loss_unsup==loss_unsup:
                 gp_loss += ((1.0*loss_unsup/self.train_batch_size))
+
             Sg_Pred[i,:] = torch.log(torch.det(sigma_est))
             LSg_Pred[i,:] = torch.log(torch.det(far_sigma_est))
-        
+
         if not (batch_id % 100) and loss_unsup==loss_unsup:
             print(LSg_Pred.max().item(),Sg_Pred.max().item(),gp_loss.item()/self.train_batch_size,Sg_Pred.mean().item())
-        
-        
+
+
 
         return gp_loss
