@@ -1,37 +1,6 @@
-import pdb
 import math
-import torch
-import torch.backends.cudnn as cudnn
-import torch.nn as nn
-import torch.nn.functional as F
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.utils.model_zoo as model_zoo
-from collections import OrderedDict
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.utils.model_zoo as model_zoo
-from collections import OrderedDict
 import torchvision.models as models
-from torch.autograd import Variable
-
-
-
-def conv_block(in_dim,out_dim):
-  return nn.Sequential(nn.Conv2d(in_dim,in_dim,kernel_size=3,stride=1,padding=1),
-                       nn.ELU(True),
-                       nn.Conv2d(in_dim,in_dim,kernel_size=3,stride=1,padding=1),
-                       nn.ELU(True),
-                       nn.Conv2d(in_dim,out_dim,kernel_size=1,stride=1,padding=0),
-                       nn.AvgPool2d(kernel_size=2,stride=2))
-def deconv_block(in_dim,out_dim):
-  return nn.Sequential(nn.Conv2d(in_dim,out_dim,kernel_size=3,stride=1,padding=1),
-                       nn.ELU(True),
-                       nn.Conv2d(out_dim,out_dim,kernel_size=3,stride=1,padding=1),
-                       nn.ELU(True),
-                       nn.UpsamplingNearest2d(scale_factor=2))
+from utils import *
 
 
 class SEBlock(nn.Module):
@@ -483,17 +452,7 @@ class DeRain_v2(nn.Module):
 
         return clean,z
 
-def gradient(y):
-    gradient_h=y[:, :, :, :-1] - y[:, :, :, 1:]
-    gradient_v=y[:, :, :-1, :] - y[:, :, 1:, :]
 
-    return gradient_h, gradient_v
-
-def TV(y):
-    gradient_h=torch.abs(y[:, :, :, :-1] - y[:, :, :, 1:])
-    gradient_v=torch.abs(y[:, :, :-1, :] - y[:, :, 1:, :])
-
-    return gradient_h, gradient_v
 
 class discriminator(nn.Module):
     # initializers
@@ -524,7 +483,3 @@ class discriminator(nn.Module):
 
         return x
 
-def normal_init(m, mean, std):
-    if isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Conv2d):
-        m.weight.data.normal_(mean, std)
-        m.bias.data.zero_()
