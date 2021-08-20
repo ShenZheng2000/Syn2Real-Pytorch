@@ -1,4 +1,3 @@
-
 # --- Imports --- #
 import time
 import torch
@@ -7,7 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from val_data import ValData
 from model import DeRain_v2
-from utils import validation
+from utils import *
 import os
 import numpy as np
 import random
