@@ -82,7 +82,8 @@ if __name__ == "__main__":
     parser.add_argument('-seed', help='set random seed', default=19, type=int)
     args = parser.parse_args()
 
-    test(args)
+    t = Tester(args)
+    t.test()
 
 
 
