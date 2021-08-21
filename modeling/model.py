@@ -20,7 +20,8 @@ class TransitionBlock(nn.Module):
         if self.droprate > 0:
             out = F.dropout(out, p=self.droprate, inplace=False, training=self.training)
         if self.choice == '1':  # upsample
-            return F.upsample_nearest(out, scale_factor=2)
+            return F.interpolate(out, scale_factor=2)
+            #return F.upsample_nearest(out, scale_factor=2)
         elif self.choice == '2':  # downsample
             return F.avg_pool2d(out, 2)
         elif self.choice == '3':  # same
@@ -111,7 +112,7 @@ class DeRain_v2(nn.Module):
         self.zout = nn.Conv2d(128, 32, kernel_size=3, stride=1, padding=1)
         # self.refine3= nn.Conv2d(20+4, 3, kernel_size=7,stride=1,padding=3)
 
-        self.upsample = F.upsample_nearest
+        #self.upsample = F.upsample_nearest
 
         self.relu = nn.LeakyReLU(0.2, inplace=True)
         self.refineclean1 = nn.Conv2d(3, 8, kernel_size=7, stride=1, padding=3)
