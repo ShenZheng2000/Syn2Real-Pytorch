@@ -1,5 +1,3 @@
-
-
 # --- Imports --- #
 import time
 import torch
@@ -7,6 +5,9 @@ import torch.nn.functional as F
 import torchvision.utils as utils
 from math import log10
 from skimage import measure
+import torch.nn as nn
+import numpy as np
+import cv2
 
 
 def to_psnr(pred_image, gt):
@@ -99,3 +100,110 @@ def adjust_learning_rate(optimizer, epoch, category, lr_decay=0.5):
     else:
         for param_group in optimizer.param_groups:
             print('Learning rate sets to {}.'.format(param_group['lr']))
+
+def conv_block(in_dim,out_dim):
+  return nn.Sequential(nn.Conv2d(in_dim,in_dim,kernel_size=3,stride=1,padding=1),
+                       nn.ELU(True),
+                       nn.Conv2d(in_dim,in_dim,kernel_size=3,stride=1,padding=1),
+                       nn.ELU(True),
+                       nn.Conv2d(in_dim,out_dim,kernel_size=1,stride=1,padding=0),
+                       nn.AvgPool2d(kernel_size=2,stride=2))
+def deconv_block(in_dim,out_dim):
+  return nn.Sequential(nn.Conv2d(in_dim,out_dim,kernel_size=3,stride=1,padding=1),
+                       nn.ELU(True),
+                       nn.Conv2d(out_dim,out_dim,kernel_size=3,stride=1,padding=1),
+                       nn.ELU(True),
+                       nn.UpsamplingNearest2d(scale_factor=2))
+
+def gradient(y):
+    gradient_h=y[:, :, :, :-1] - y[:, :, :, 1:]
+    gradient_v=y[:, :, :-1, :] - y[:, :, 1:, :]
+
+    return gradient_h, gradient_v
+
+def TV(y):
+    gradient_h=torch.abs(y[:, :, :, :-1] - y[:, :, :, 1:])
+    gradient_v=torch.abs(y[:, :, :-1, :] - y[:, :, 1:, :])
+
+    return gradient_h, gradient_v
+
+def normal_init(m, mean, std):
+    if isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Conv2d):
+        m.weight.data.normal_(mean, std)
+        m.bias.data.zero_()
+
+def print_network(net):
+    num_params = 0
+    for param in net.parameters():
+        num_params += param.numel()
+    print(net)
+    print('Total number of parameters: %d' % num_params)
+
+
+class FocalLoss(nn.Module):
+
+    # def __init__(self, device, gamma=0, eps=1e-7, size_average=True):
+    def __init__(self, gamma=0, eps=1e-7, size_average=True, reduce=True):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.eps = eps
+        self.size_average = size_average
+        self.reduce = reduce
+        # self.device = device
+
+    def forward(self, input, target):
+        # y = one_hot(target, input.size(1), self.device)
+        y = one_hot(target, input.size(1))
+        probs = F.softmax(input, dim=1)
+        probs = (probs * y).sum(1)  # dimension ???
+        probs = probs.clamp(self.eps, 1. - self.eps)
+
+        log_p = probs.log()
+        # print('probs size= {}'.format(probs.size()))
+        # print(probs)
+
+        batch_loss = -(torch.pow((1 - probs), self.gamma)) * log_p
+        # print('-----bacth_loss------')
+        # print(batch_loss)
+
+        if self.reduce:
+            if self.size_average:
+                loss = batch_loss.mean()
+            else:
+                loss = batch_loss.sum()
+        else:
+            loss = batch_loss
+        return loss
+
+def one_hot(index, classes):
+    size = index.size()[:1] + (classes,) + index.size()[1:]
+    view = index.size()[:1] + (1,) + index.size()[1:]
+
+    # mask = torch.Tensor(size).fill_(0).to(device)
+    if torch.cuda.is_available():
+        mask = torch.Tensor(size).fill_(0).cuda()
+    else:
+        mask = torch.Tensor(size).fill_(0)
+    index = index.view(view)
+    ones = 1.
+
+    return mask.scatter_(1, index, ones)
+
+
+def get_NoGT_target(inputs):
+    sfmx_inputs = F.log_softmax(inputs, dim=1)
+    target = torch.argmax(sfmx_inputs, dim=1)
+    return target
+
+def rgb_demean(inputs):
+    rgb_mean = np.array([0.48109378172, 0.4575245789, 0.4078705409]).reshape((3, 1, 1))
+    inputs = inputs - rgb_mean  # inputs in [0,1]
+    return inputs
+
+def resize_target(target, size):
+    new_target = np.zeros((target.shape[0], size, size), np.int32)
+    for i, t in enumerate(target.numpy()):
+        new_target[i, ...] = cv2.resize(t, (size,) * 2, interpolation=cv2.INTER_CUBIC)
+    return new_target
+
+
