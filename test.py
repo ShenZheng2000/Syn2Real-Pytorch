@@ -1,11 +1,8 @@
 # --- Imports --- #
-import time
-import torch
 import argparse
-import torch.nn as nn
 from torch.utils.data import DataLoader
-from val_data import ValData
-from model import DeRain_v2
+from data.val_data import ValData
+from modeling.model import DeRain_v2
 from utils import *
 import os
 import numpy as np
@@ -20,6 +17,8 @@ class Tester():
         self.exp_name = args.exp_name
         self.device_ids = [Id for Id in range(torch.cuda.device_count())]
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.ghost = args.ghost
+        self.mix = args.mix
 
     def get_seed(self, seed):
         if seed:
@@ -50,7 +49,7 @@ class Tester():
                                      num_workers=0)
 
         # --- Define the network --- #
-        net = DeRain_v2().to(self.device)
+        net = DeRain_v2(ghost=self.ghost, mix=self.mix).to(self.device)
 
         # --- Load the network weight --- #
         net.load_state_dict(torch.load('./{}/{}_best'.format(self.exp_name, self.category)))
@@ -80,6 +79,8 @@ if __name__ == "__main__":
     parser.add_argument('-category', default='derain', type=str, help='Set image category (derain or dehaze?)')
     parser.add_argument('-val_filename', default='SIRR_test.txt', type=str, help='dataset for testing (real_input_split1.txt or SIRR_test.txt)',)
     parser.add_argument('-seed', help='set random seed', default=19, type=int)
+    parser.add_argument('-ghost', default=1.0, type=float)  # ghost coef. (mid_ch = lambda_ghost * in_ch)
+    parser.add_argument('-mix', default=False, type=bool)  # ghost coef. (mid_ch = lambda_ghost * in_ch)
     args = parser.parse_args()
 
     t = Tester(args)
