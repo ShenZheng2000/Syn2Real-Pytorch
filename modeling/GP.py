@@ -2,14 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-
-
 import numpy as np
 import random
 from scipy.spatial.distance import cdist
 from sklearn.metrics.pairwise import euclidean_distances
 from numpy.linalg import inv
 from sklearn.metrics.pairwise import cosine_similarity
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def kronecker(A, B):
@@ -88,11 +88,11 @@ def kernel_rq_np(x,y,var,alpha=0.5):
     return Ker
 
 def numpy_to_torch(input1, input2, input3, input4, input5):
-    output1 = torch.from_numpy(input1.astype(np.float32)).cuda()
-    output2 = torch.from_numpy(input2.astype(np.float32)).cuda()
-    output3 = torch.from_numpy(input3.astype(np.float32)).cuda()
-    output4 = torch.from_numpy(input4.astype(np.float32)).cuda()
-    output5 = torch.from_numpy(input5.astype(np.float32)).cuda()
+    output1 = torch.from_numpy(input1.astype(np.float32)).to(device)
+    output2 = torch.from_numpy(input2.astype(np.float32)).to(device)
+    output3 = torch.from_numpy(input3.astype(np.float32)).to(device)
+    output4 = torch.from_numpy(input4.astype(np.float32)).to(device)
+    output5 = torch.from_numpy(input5.astype(np.float32)).to(device)
     return output1, output2, output3, output4, output5
 
 
@@ -117,7 +117,7 @@ class GPStruct(object):
         self.kernel_type = kernel_type
 
         # Identity matrix
-        self.Eye = torch.eye(self.z_numchnls).cuda()
+        self.Eye = torch.eye(self.z_numchnls).to(device)
 
         # declaring kernel function
         if kernel_type =='Linear':
@@ -308,8 +308,8 @@ class GPStruct(object):
 
     def compute_gploss(self,zy_in,imgid,batch_id,label_flg=0):
         tensor_mat = zy_in
-        Sg_Pred = torch.zeros([self.train_batch_size,1]).cuda()
-        LSg_Pred = torch.zeros([self.train_batch_size,1]).cuda()
+        Sg_Pred = torch.zeros([self.train_batch_size,1]).to(device)
+        LSg_Pred = torch.zeros([self.train_batch_size,1]).to(device)
         gp_loss = 0
 
         for i in range(tensor_mat.shape[0]):
