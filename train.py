@@ -6,13 +6,53 @@ from data.train_data import TrainData
 from data.val_data import ValData
 from modeling.model import DeRain_v2
 from modeling.GP import GPStruct
+from modeling.fpn import *
 from utils import *
 from torchvision.models import vgg16
 from modeling.perceptual import LossNetwork
 import os
+import sys
 import numpy as np
 import random
+from torch.autograd import Variable
+
 plt.switch_backend('agg')
+
+
+def SegLoss(input_train, out_train, device):
+    # TODO: Seg is too large, consider scale with 0.1
+    # Build Segmentation model
+    num_of_SegClass = 21
+    seg = fpn(num_of_SegClass).to(device)
+    seg_criterion = FocalLoss(gamma=2).to(device)
+
+    # Build and clip residual image
+    out_train = torch.clamp(input_train - out_train, 0., 1.)
+
+    # Build and dmean seg. input (maybe clip image before)
+    seg_input = out_train.data.cpu().numpy()
+    for n in range(out_train.size()[0]):
+        seg_input[n, :, :, :] = rgb_demean(seg_input[n, :, :, :])
+
+    # send seg. input to cuda
+    seg_input = Variable(torch.from_numpy(seg_input).to(device))
+
+    # build seg. output
+    seg_output = seg(seg_input)
+
+    # build seg. target
+    target = (get_NoGT_target(seg_output)).data.cpu()
+    target_ = resize_target(target, seg_output.size(2))
+    target_ = torch.from_numpy(target_).long().to(device)
+
+    # calculate seg. loss
+    seg_loss = seg_criterion(seg_output, target_).to(device)
+
+    # freeze seg. backpropagation
+    for param in seg.parameters():
+        param.requires_grad = False
+
+    return seg_loss
 
 
 class Trainer():
@@ -29,6 +69,7 @@ class Trainer():
         self.exp_name = args.exp_name
         self.lambgp = args.lambda_GP
         self.use_GP_inlblphase = False  # indication whether or not to use GP during labeled phase
+        self.lambseg = args.lambda_SEG
 
         self.labeled_name = args.labeled_name
         self.unlabeled_name = args.unlabeled_name
@@ -37,20 +78,23 @@ class Trainer():
         self.device_ids = [Id for Id in range(torch.cuda.device_count())]
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        self.net = DeRain_v2().to(self.device)
+        self.ghost = args.ghost
+        self.mix = args.mix
+
+        self.net = DeRain_v2(ghost=self.ghost, mix=self.mix).to(self.device)
         self.num_epochs, self.train_data_dir, self.val_data_dir = self.get_type(self.category)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=self.learning_rate)
 
         # --- Load training data and validation/test data --- #
         self.unlbl_train_data_loader = DataLoader(TrainData(self.crop_size, self.train_data_dir, self.unlabeled_name),
-                                                            batch_size=self.train_batch_size, shuffle=True, num_workers=0)
+                                                  batch_size=self.train_batch_size, shuffle=True, num_workers=0)
         self.lbl_train_data_loader = DataLoader(TrainData(self.crop_size, self.train_data_dir, self.labeled_name),
-                                                        batch_size=self.train_batch_size,
-                                                        shuffle=True, num_workers=0)
+                                                batch_size=self.train_batch_size,
+                                                shuffle=True, num_workers=0)
         self.val_data_loader = DataLoader(ValData(self.val_data_dir, self.val_filename),
-                                                    batch_size=self.val_batch_size,
-                                                    shuffle=False,
-                                                    num_workers=0)
+                                          batch_size=self.val_batch_size,
+                                          shuffle=False,
+                                          num_workers=0)
 
         self.num_labeled = self.train_batch_size * len(self.lbl_train_data_loader)  # number of labeled images
         self.num_unlabeled = self.train_batch_size * len(self.unlbl_train_data_loader)  # number of unlabeled images
@@ -100,8 +144,9 @@ class Trainer():
             print('--- no weight loaded ---')
 
     def cal_params(self, net):
-        pytorch_total_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
-        print("Total_params: {}".format(pytorch_total_params))
+        pass
+        # pytorch_total_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
+        # print("Total_params: {}".format(pytorch_total_params))
 
     def print_params(self):
         print('--- Hyper-parameters for training ---')
@@ -171,11 +216,19 @@ class Trainer():
                 self.net.train()
                 pred_image, zy_in = self.net(input_image)
                 gp_loss = 0
+                seg_loss = 0
+
+                # TODO: Unsuperivsed Segmentation
+                assert pred_image.size() == input_image.size()
+                if self.lambseg != 0:
+                    seg_loss = SegLoss(input_image, pred_image, device=self.device)
+                    #print("seg_loss is", seg_loss)
 
                 if self.lambgp != 0:
                     gp_loss = self.gp_struct.compute_gploss(zy_in, imgid, batch_id, 0)
+                    #print("gp_loss is", gp_loss)
 
-                loss = self.lambgp * gp_loss
+                loss = self.lambgp * gp_loss + self.lambseg * seg_loss
                 if loss != 0:
                     loss.backward()
                     self.optimizer.step()
@@ -200,14 +253,14 @@ class Trainer():
 
         val_psnr, val_ssim = validation(self.net, self.val_data_loader, self.device, self.category, self.exp_name)
         one_epoch_time = time.time() - self.start_time
-        print_log(epoch + 1, self.num_epochs, one_epoch_time, train_psnr, val_psnr, val_ssim, self.category, self.exp_name)
+        print_log(epoch + 1, self.num_epochs, one_epoch_time, train_psnr, val_psnr, val_ssim, self.category,
+                  self.exp_name)
 
         # --- update the network weight --- #
         if val_psnr >= self.old_val_psnr:
             torch.save(self.net.state_dict(), './{}/{}_best'.format(self.exp_name, self.category))
             print('model saved')
             self.old_val_psnr = val_psnr
-
 
     def train(self):
 
@@ -224,12 +277,12 @@ class Trainer():
         self.load_train_weight(self.exp_name, self.net, self.category)
 
         # --- Calculate all trainable parameters in network --- #
-        self.cal_params(self.net)
-
+        print_network(self.net)
 
         # --- Previous PSNR and SSIM in testing --- #
         self.net.eval()
-        self.old_val_psnr, self.old_val_ssim = validation(self.net, self.val_data_loader, self.device, self.category, self.exp_name)
+        self.old_val_psnr, self.old_val_ssim = validation(self.net, self.val_data_loader, self.device, self.category,
+                                                          self.exp_name)
         print('old_val_psnr: {0:.2f}, old_val_ssim: {1:.4f}'.format(self.old_val_psnr, self.old_val_ssim))
 
         self.net.train()
@@ -247,9 +300,6 @@ class Trainer():
             self.train_unlabel(epoch)
 
 
-
-
-
 if __name__ == "__main__":
     # --- Parse hyper-parameters  --- #
     parser = argparse.ArgumentParser(description='Hyper-parameters for network')
@@ -261,7 +311,8 @@ if __name__ == "__main__":
     parser.add_argument('-val_batch_size', default=1, type=int, help='Set the validation/test batch size')
     parser.add_argument('-category', default='derain', type=str, help='Set image category (derain or dehaze?)')
     parser.add_argument('-version', default='version1', type=str, help='Set the GP model (version1 or version2?)')
-    parser.add_argument('-kernel_type', default='Linear', type=str, help='Set the GP model (Linear or Squared_exponential or Rational_quadratic?)')
+    parser.add_argument('-kernel_type', default='Linear', type=str,
+                        help='Set the GP model (Linear or Squared_exponential or Rational_quadratic?)')
     parser.add_argument('-exp_name', type=str, help='directory for saving the networks of the experiment')
     parser.add_argument('-lambda_GP', default=0.0015, type=float, help='Set the lambda_GP for gploss in loss function')
     parser.add_argument('-seed', default=19, type=int, help='set random seed')
@@ -270,8 +321,12 @@ if __name__ == "__main__":
     parser.add_argument('-unlabeled_name', default='real_input_split1.txt', type=str)
     parser.add_argument('-val_filename', default='SIRR_test.txt', type=str)
 
+    parser.add_argument('-lambda_SEG', default=0.0001, type=float)
+
+    parser.add_argument('-ghost', default=1, type=int)  # ghost coef. (mid_ch = lambda_ghost * in_ch)
+    parser.add_argument('-mix', default=False, type=bool)  # ghost coef. (mid_ch = lambda_ghost * in_ch)
+
     args = parser.parse_args()
 
     t = Trainer(args)
     t.train()
-
