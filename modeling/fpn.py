@@ -30,9 +30,9 @@ class fpn_module(nn.Module):
 
     def _concatenate(self, p5, p4, p3, p2):
         _, _, H, W = p2.size()
-        p5 = F.upsample(p5, size=(H, W), mode='bilinear')
-        p4 = F.upsample(p4, size=(H, W), mode='bilinear')
-        p3 = F.upsample(p3, size=(H, W), mode='bilinear')
+        p5 = F.interpolate(p5, size=(H, W), mode='bilinear')
+        p4 = F.interpolate(p4, size=(H, W), mode='bilinear')
+        p3 = F.interpolate(p3, size=(H, W), mode='bilinear')
         return torch.cat([p5, p4, p3, p2], dim=1)
 
     def _upsample_add(self, x, y):
@@ -52,7 +52,7 @@ class fpn_module(nn.Module):
         So we choose bilinear upsample which supports arbitrary output sizes.
         '''
         _, _, H, W = y.size()
-        return F.upsample(x, size=(H, W), mode='bilinear') + y
+        return F.interpolate(x, size=(H, W), mode='bilinear') + y
 
     def forward(self, c2, c3, c4, c5):
         # Top-down
